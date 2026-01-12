@@ -1,160 +1,293 @@
-# AD演化预测 - Residual Flow Matching for Longitudinal Brain MRI Generation
+# ReFlow: Residual Flow Matching for Longitudinal Brain MRI Generation
 
-基于Residual Flow Matching的预测阿尔茨海默病患者的未来MRI。
+Official PyTorch implementation of **"Learning What Changes: Residual Flow Matching for Longitudinal Brain MRI Generation"**.
 
-## 核心思想
+## 🔑 Key Features
 
-```
-数学框架:
-├── Flow:     z_t = t * x + (1-t) * ε,  ε ~ N(0,1)
-├── 预测:     x̂ = model(z_t, t, condition)  
-├── 损失:     v-loss = ||v_pred - v_target||²
-└── 采样:     Heun ODE solver (从纯噪声到clean图像)
+- **Residual Learning**: Only learns the subtle structural changes (1-3% of the image), not the entire brain anatomy
+- **Flow Matching**: Efficient generation with straight probability paths (50 steps vs. 1000 for diffusion)
+- **Multi-scale Temporal Conditioning**: Captures frame-level anatomy, inter-scan progression trends, and clinical biomarkers
+- **3D Native**: Full 3D volumetric processing for brain MRI
+- **Interpretable Outputs**: Predicted residuals directly visualize disease-induced changes
 
-增强条件注入:
-├── 历史图像直接concat到UNet输入 (4通道: z_t + 3个历史帧)
-├── AdaGN调制 (与JiT的adaLN一致)
-└── 临床信息融合
-```
-
-## 文件结构
+## 📁 Project Structure
 
 ```
-ad_jit_clean/
-├── train_jit.py      # 训练脚本 (包含模型定义)
-├── inference.py      # 推理脚本
-├── dataset.py        # 数据加载
-├── preprocess_nifti.py  # NIfTI预处理工具
-└── README.md
+ReFlow/
+├── train_jit_3d_residual.py    # Training script
+├── inference_3d_residual.py    # Inference script
+├── dataset_3d.py               # Dataset classes
+├── preprocess_3d.py            # NIfTI preprocessing
+├── requirements.txt            # Dependencies
+├── configs/                    # Configuration files
+│   └── default.yaml
+├── assets/                     # Images for README
+└── checkpoints/                # Saved models
 ```
 
-## 数据格式
+## 🛠️ Installation
 
-### 目录结构
+### Requirements
+
+- Python >= 3.8
+- PyTorch >= 2.0
+- CUDA >= 11.8 (recommended)
+
+### Setup
+
+```bash
+# Clone the repository
+git clone https://github.com/String-bad/EGCD.git
+cd EGCD
+
+# Create conda environment
+conda create -n reflow python=3.10
+conda activate reflow
+
+# Install PyTorch (adjust CUDA version as needed)
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+
+# Install other dependencies
+pip install -r requirements.txt
+```
+
+### Dependencies
+
+```txt
+torch>=2.0.0
+numpy>=1.21.0
+nibabel>=5.0.0
+scipy>=1.9.0
+pandas>=1.5.0
+tqdm>=4.64.0
+scikit-image>=0.19.0
+matplotlib>=3.6.0
+```
+
+## 📊 Data Preparation
+
+### Expected Data Structure
+
 ```
 data_root/
-├── images/
-│   ├── subject_001/
-│   │   ├── visit_0.png
-│   │   ├── visit_1.png
-│   │   ├── visit_2.png
-│   │   └── visit_3.png
-│   └── subject_002/
-│       └── ...
+├── sub-001/
+│   ├── ses-20060418082030/
+│   │   └── anat/
+│   │       └── sub-001_ses-xxx_T1w.nii.gz
+│   ├── ses-20061102081644/
+│   │   └── anat/
+│   │       └── sub-001_ses-xxx_T1w.nii.gz
+│   └── ...
+├── sub-002/
+│   └── ...
+└── clinical_data.csv
 ```
 
-### 临床数据CSV
-```csv
-subject_id,visit,age,sex,mmse,cdr,apoe,diagnosis,visit_month
-subject_001,0,72.5,1,28,0.5,1,MCI,0
-subject_001,1,73.5,1,27,0.5,1,MCI,12
-...
+Or ADNI format:
+```
+data_root/
+├── 002_S_0619/
+│   ├── bl.nii.gz      # baseline
+│   ├── m12.nii.gz     # month 12
+│   ├── m24.nii.gz     # month 24
+│   └── ...
+└── ...
 ```
 
-## 使用方法
-
-### 1. 数据预处理 (NIfTI → PNG)
+### Preprocessing
 
 ```bash
-python preprocess_nifti.py \
-    --input_dir /path/to/nifti \
-    --output_dir /path/to/png \
-    --strategy hippocampus \
-    --size 256
+python preprocess_3d.py \
+    --input_dir /path/to/raw/nifti \
+    --output_dir /path/to/processed \
+    --volume_size 96 112 96 \
+    --skull_strip \
+    --bias_correction \
+    --n_jobs 8
 ```
 
-### 2. 训练
+### Clinical Data Format (Optional)
+
+CSV file with columns:
+| Column | Description |
+|--------|-------------|
+| `subject_id` or `RID` | Subject identifier |
+| `VISCODE2` | Visit code (bl, m12, m24, ...) |
+| `MMSE` | Mini-Mental State Examination score |
+| `CDRSB` | CDR Sum of Boxes |
+| `AGE` | Age at visit |
+| `PTGENDER` | Sex (Male/Female) |
+| `APOE4` | APOE ε4 allele count (0/1/2) |
+
+## 🚀 Training
+
+### Basic Training
 
 ```bash
-CUDA_VISIBLE_DEVICES=0 python train_jit.py \
+python train_jit_3d_residual.py \
+    --data_path /path/to/processed/data \
+    --clinical_csv /path/to/clinical.csv \
+    --output_dir ./output \
+    --model_size S \
+    --num_history 3 \
+    --batch_size 1 \
+    --grad_accum 4 \
+    --epochs 300 \
+    --lr 1e-4
+```
+
+### Model Sizes
+
+| Size | Base Channels | Parameters | GPU Memory |
+|------|---------------|------------|------------|
+| S    | 32            | ~15M       | ~8GB       |
+| M    | 48            | ~40M       | ~16GB      |
+| L    | 64            | ~80M       | ~24GB      |
+
+### Training Options
+
+```bash
+# Full options
+python train_jit_3d_residual.py \
     --data_path /path/to/data \
     --clinical_csv /path/to/clinical.csv \
-    --model_size B \
-    --batch_size 4 \
+    --output_dir ./output \
+    --model_size S \
+    --num_history 3 \
+    --volume_size 96 112 96 \
+    --max_time_delta 120 \
+    --random_target \
+    --batch_size 1 \
+    --grad_accum 4 \
     --epochs 300 \
     --lr 1e-4 \
-    --eval_every 10 \
+    --warmup 1000 \
+    --use_clinical \
+    --use_checkpoint \
+    --use_amp \
     --sample_steps 50 \
-    --cfg_scale 2.0
+    --cfg_scale 2.0 \
+    --eval_every 10 \
+    --save_every 50 \
+    --patience 50
 ```
 
-### 3. 推理
+### Ablation Studies
 
 ```bash
-python inference.py \
-    --checkpoint ./output_jit/run_xxx/checkpoints/best.pt \
+# Without time delta conditioning
+python train_jit_3d_residual.py ... --ablate_time_delta
+
+# Without difference encoding
+python train_jit_3d_residual.py ... --ablate_diff
+
+# Without clinical features
+python train_jit_3d_residual.py ... --no_clinical
+```
+
+## 🔮 Inference
+
+### Basic Inference
+
+```bash
+python inference_3d_residual.py \
+    --checkpoint ./output/run_xxx/checkpoints/best.pt \
     --data_path /path/to/data \
+    --output_dir ./results
+```
+
+### Predict at Specific Time Point
+
+```bash
+# Predict 12 months ahead
+python inference_3d_residual.py \
+    --checkpoint ./output/run_xxx/checkpoints/best.pt \
+    --data_path /path/to/data \
+    --time_delta 12 \
+    --output_dir ./results_12m
+```
+
+### Inference Options
+
+```bash
+python inference_3d_residual.py \
+    --checkpoint /path/to/best.pt \
+    --data_path /path/to/data \
+    --clinical_csv /path/to/clinical.csv \
     --output_dir ./results \
-    --sample_steps 50 \
-    --cfg_scale 2.0
+    --time_delta 12 \           # Fixed time delta (months)
+    --num_samples -1 \          # -1 for all samples
+    --sample_steps 50 \         # Euler steps
+    --cfg_scale 2.0 \           # Classifier-free guidance
+    --fast                      # Use fast Euler (vs Heun)
 ```
 
-## 参数说明
-
-### 训练参数
-
-| 参数 | 默认值 | 说明 |
-|------|--------|------|
-| `--data_path` | 必需 | 数据目录 |
-| `--clinical_csv` | None | 临床数据CSV |
-| `--model_size` | B | 模型大小: S (~20M), B (~80M), L (~150M) |
-| `--batch_size` | 4 | 批大小 |
-| `--epochs` | 300 | 训练轮数 |
-| `--lr` | 1e-4 | 学习率 |
-| `--warmup_epochs` | 10 | 预热轮数 |
-| `--eval_every` | 10 | 验证间隔 |
-| `--save_every` | 50 | 保存间隔 |
-| `--sample_steps` | 50 | 采样步数 |
-| `--cfg_scale` | 2.0 | CFG强度 |
-| `--patience` | 50 | 早停耐心值 |
-| `--use_amp` | True | 混合精度训练 |
-| `--no_clinical` | False | 禁用临床信息 |
-
-### 模型配置
-
-| 大小 | base_ch | 通道倍数 | 参数量 |
-|------|---------|----------|--------|
-| S | 48 | [1,2,4,4] | ~20M |
-| B | 64 | [1,2,4,8] | ~80M |
-| L | 96 | [1,2,4,8] | ~150M |
-
-## 输出结构
+### Output Structure
 
 ```
-output_jit/run_20241226_XXXXXX/
-├── config.json           # 训练配置
-├── checkpoints/
-│   ├── best.pt          # 最佳模型 (PSNR最高)
-│   └── epoch_0100.pt    # 定期保存
-└── samples/
-    └── epoch_0010/
-        ├── sample_0.png # 对比图
-        ├── sample_1.png
-        └── ...
+results/
+├── nifti/                      # Generated NIfTI files
+│   ├── subj_001_m24_generated.nii.gz
+│   └── subj_001_m24_gt.nii.gz
+├── residuals/                  # Predicted residuals (for visualization)
+│   └── subj_001_m24_residual.nii.gz
+├── comparisons/                # Visual comparisons
+│   └── subj_001_m24_comparison.png
+├── metrics.csv                 # Per-sample metrics
+├── summary.json                # Aggregated statistics
+└── results_table.tex           # LaTeX table
 ```
 
-## 评估指标
+## 📈 Results
 
-- **PSNR** (Peak Signal-to-Noise Ratio): 越高越好, >25dB良好, >30dB优秀
-- **SSIM** (Structural Similarity): 越接近1越好, >0.8良好
+### Comparison with Baselines
 
-## 显存需求
+| Method | MAE ↓ | MSE ↓ | PSNR (dB) ↑ | SSIM ↑ |
+|--------|-------|-------|-------------|--------|
+| Copy-last | 0.0238 ± 0.0137 | 0.0028 ± 0.0036 | 27.74 ± 4.07 | 0.9459 ± 0.0442 |
+| **Ours (ReFlow)** | **0.0122 ± 0.0101** | **0.0009 ± 0.0021** | **34.78 ± 5.65** | **0.9777 ± 0.0290** |
 
-| 配置 | 估计显存 |
-|------|---------|
-| S + batch=8 + AMP | ~10GB |
-| B + batch=4 + AMP | ~12GB |
-| B + batch=2 + AMP | ~8GB |
-| L + batch=2 + AMP | ~16GB |
+### Effect of History Length
 
-## 依赖
+| #History | MAE ↓ | PSNR (dB) ↑ | SSIM ↑ |
+|----------|-------|-------------|--------|
+| 2 | 0.0113 ± 0.0080 | 34.85 ± 4.90 | 0.9806 ± 0.0212 |
+| 3 | **0.0095 ± 0.0087** | **36.54 ± 4.53** | **0.9846 ± 0.0240** |
 
+## 🧪 Testing
+
+```bash
+# Test timestamp parsing
+python dataset_3d.py --test_parsing
+
+# Test dataset loading
+python dataset_3d.py --data_path /path/to/data
 ```
-torch >= 1.10
-numpy
-pillow
-pandas
-tqdm
-matplotlib
-nibabel  # 仅预处理需要
+
+## 📝 Citation
+
+If you find this work useful, please cite:
+
+```bibtex
+@inproceedings{you2026reflow,
+  title={Learning What Changes: Residual Flow Matching for Longitudinal Brain MRI Generation},
+  author={You, Dianlong and Zhang, Minghao},
+  booktitle={Proceedings of the International Joint Conference on Artificial Intelligence (IJCAI)},
+  year={2026}
+}
 ```
+
+## 🙏 Acknowledgements
+
+- [ADNI](http://adni.loni.usc.edu/) for the longitudinal brain MRI dataset
+- [Flow Matching](https://github.com/facebookresearch/flow_matching) for the generative framework
+- [ANTs](http://stnava.github.io/ANTs/) for neuroimaging preprocessing tools
+
+## 📄 License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## 📧 Contact
+
+For questions or issues, please open an issue on GitHub or contact:
+- Minghao Zhang: gzmh@stumail.ysu.edu.cn
