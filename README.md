@@ -1,4 +1,4 @@
-# ReFlow: Residual Flow Matching for Longitudinal Brain MRI Generation
+# EvoFlow: Evolution-guided Flow Matching for Longitudinal Brain MRI Generation
 
 Official PyTorch implementation of **"Learning What Changes: Residual Flow Matching for Longitudinal Brain MRI Generation"**.
 
